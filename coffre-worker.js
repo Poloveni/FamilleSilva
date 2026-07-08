@@ -55,7 +55,8 @@ export default {
       }
 
       // Analyse : "Javier Silva a déposé 74x Pochon De Mexicana"
-      const RE = /(.+?)\s+a\s+(d[ée]pos[ée]?|retir[ée]?)\s+(\d+)\s*x?\s+(.+)/i;
+      // Gère aussi les grands nombres avec séparateurs : "299 697x" ou "299,697x".
+      const RE = /(.+?)\s+a\s+(d[ée]pos[ée]?|retir[ée]?)\s+(\d[\d\s.,]*)\s*x\s+(.+)/i;
       const moves = [];
       for (const m of all) {
         // On rassemble tous les endroits où le texte peut se cacher.
@@ -76,11 +77,15 @@ export default {
           const clean = String(t).replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim();
           const match = clean.match(RE);
           if (match) {
+            const item = match[4]
+              .replace(/\s*(du|dans le|au)\s+coffre\s*!*\s*$/i, "") // "… du coffre !" → ""
+              .replace(/[!.\s]+$/, "")
+              .trim();
             moves.push({
               qui: match[1].trim(),
               action: /d[ée]pos/i.test(match[2]) ? "dépôt" : "retrait",
-              qty: parseInt(match[3], 10),
-              item: match[4].trim(),
+              qty: parseInt(match[3].replace(/[^\d]/g, ""), 10),
+              item,
               date: m.timestamp,
             });
             break;
@@ -97,6 +102,7 @@ export default {
       const body = JSON.stringify({
         maj: new Date().toISOString(),
         messages_lus: all.length,
+        depuis: moves.length ? moves[moves.length - 1].date : null,
         mouvements: moves.slice(0, 40),
         stock,
       });

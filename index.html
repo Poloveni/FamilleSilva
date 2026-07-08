@@ -237,6 +237,18 @@
       </div>
     </section>
 
+    <!-- ===== CARTE COFFRE ===== -->
+    <section class="card" style="grid-column: 1 / -1;">
+      <div class="card-head">
+        <div class="ico">🧰</div>
+        <h2>Coffre de la famille</h2>
+        <div class="live-dot off" id="coffreDot"></div>
+      </div>
+      <div id="coffreBody">
+        <div class="empty">Chargement…</div>
+      </div>
+    </section>
+
   </div>
 
   <footer>FAMILLE SILVA — USAGE INTERNE · Actualisation automatique toutes les 60 secondes</footer>
@@ -254,6 +266,9 @@ const DISCORD_GUILD_ID = "1521913398496071790";
 
 // 2) Le code du serveur FiveM (déjà réglé sur FlashBack FA — ne pas toucher).
 const FIVEM_CODE = "k4aqg7";
+
+// 3) L'adresse du Worker Cloudflare qui lit le coffre (déjà réglée).
+const COFFRE_URL = "https://tiny-sunset-0d8a.schricke-paul.workers.dev/";
 
 // Mot de passe actuel : silva2026 (stocké de façon chiffrée ci-dessous).
 const PASSWORD_HASH = "70829cb44dffd5af81e0ee3f9b8cffabe2da8e1e14190bf4a99655ec5a05e9ec";
@@ -422,6 +437,51 @@ async function loadDiscord() {
   }
 }
 
+/* ---------- Coffre ---------- */
+async function loadCoffre() {
+  const body = $("coffreBody");
+  const dot = $("coffreDot");
+  try {
+    const r = await fetch(COFFRE_URL);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const d = await r.json();
+    if (d.error) throw new Error(d.error);
+    dot.classList.remove("off");
+
+    const fmtNum = (n) => n.toLocaleString("fr-FR");
+    const fmtDate = (iso) => new Date(iso).toLocaleString("fr-FR", {
+      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
+    });
+    const depuis = d.depuis ? new Date(d.depuis).toLocaleDateString("fr-FR") : "?";
+
+    // Bilan par objet, trié du plus gros au plus petit (en valeur absolue).
+    const entries = Object.entries(d.stock || {}).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+    const stockHtml = entries.length ? entries.map(([item, qty]) => `
+      <div class="stat" style="min-width:150px">
+        <div class="num" style="color:${qty >= 0 ? "var(--gold)" : "#e8555f"}">${qty >= 0 ? "+" : ""}${fmtNum(qty)}</div>
+        <div class="lbl">${escapeHtml(item)}</div>
+      </div>`).join("") : `<div class="empty">Aucun objet détecté.</div>`;
+
+    const movesHtml = (d.mouvements || []).slice(0, 15).map(mv => `
+      <div class="row">
+        <span class="status-dot" style="background:${mv.action === "dépôt" ? "var(--green)" : "#e8555f"}"></span>
+        <span class="name"><b>${escapeHtml(mv.qui)}</b> — ${mv.action} de <b>${fmtNum(mv.qty)}×</b> ${escapeHtml(mv.item)}</span>
+        <span class="pid">${fmtDate(mv.date)}</span>
+      </div>`).join("") || `<div class="empty">Aucun mouvement récent.</div>`;
+
+    body.innerHTML = `
+      <div class="stat-row">${stockHtml}</div>
+      <p style="color:var(--muted); font-size:11.5px; margin:-8px 0 14px;">
+        Bilan calculé depuis le début du journal (${depuis}) : dépôts moins retraits.
+        Un chiffre négatif = plus de sorties que d'entrées enregistrées.
+      </p>
+      <div class="list">${movesHtml}</div>`;
+  } catch (e) {
+    dot.classList.add("off");
+    body.innerHTML = `<div class="error-msg">Impossible de lire le coffre pour le moment.<br>Réessaie avec « Actualiser » dans une minute.</div>`;
+  }
+}
+
 /* ---------- Utilitaires ---------- */
 function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -430,6 +490,7 @@ function escapeHtml(s) {
 function refreshAll() {
   loadFivem();
   loadDiscord();
+  loadCoffre();
   $("refreshInfo").textContent = "Mis à jour à " + new Date().toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
