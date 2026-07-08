@@ -180,6 +180,48 @@
   .setup-note code { background: #0b0b10; padding: 2px 7px; border-radius: 5px; color: var(--text); font-size: 12px; }
 
   footer { text-align: center; color: var(--muted); font-size: 11.5px; margin-top: 40px; letter-spacing: 1px; }
+
+  /* ============ CARTE COFFRE ============ */
+  .coffre-grid { display: grid; grid-template-columns: 5fr 7fr; gap: 26px; }
+  @media (max-width: 820px) { .coffre-grid { grid-template-columns: 1fr; } }
+  .coffre-grid h3 {
+    font-size: 12px; letter-spacing: 1.5px; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; margin-bottom: 12px;
+  }
+  .tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .tbl th {
+    text-align: right; font-size: 10.5px; letter-spacing: 1px; text-transform: uppercase;
+    color: var(--muted); font-weight: 600; padding: 6px 10px; border-bottom: 1px solid var(--border);
+  }
+  .tbl th:first-child, .tbl td:first-child { text-align: left; }
+  .tbl td {
+    padding: 8px 10px; border-bottom: 1px solid var(--panel-2);
+    text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap;
+  }
+  .tbl td:first-child { white-space: normal; }
+  .tbl tr:hover td { background: var(--panel-2); }
+  .tbl .in { color: var(--green); }
+  .tbl .out { color: #e8555f; }
+  .tbl .net-pos { color: var(--gold); font-weight: 700; }
+  .tbl .net-neg { color: #e8555f; font-weight: 700; }
+  .tbl .net-zero { color: var(--muted); }
+  .note { color: var(--muted); font-size: 11.5px; line-height: 1.6; margin-top: 12px; }
+
+  .filters { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  .filters select {
+    background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px;
+    color: var(--text); font-size: 12.5px; padding: 7px 10px; outline: none; flex: 1; min-width: 140px;
+  }
+  .seg { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button {
+    background: transparent; border: none; color: var(--muted);
+    font-size: 12px; padding: 7px 12px; cursor: pointer;
+  }
+  .seg button.on { background: var(--gold-soft); color: var(--gold); }
+  .day-sep {
+    color: var(--muted); font-size: 10.5px; letter-spacing: 1.5px; text-transform: uppercase;
+    padding: 8px 2px 2px;
+  }
 </style>
 </head>
 <body>
@@ -438,6 +480,12 @@ async function loadDiscord() {
 }
 
 /* ---------- Coffre ---------- */
+let coffreData = null;
+let coffreFilterItem = "";
+let coffreFilterAction = "";
+
+const fmtNum = (n) => n.toLocaleString("fr-FR");
+
 async function loadCoffre() {
   const body = $("coffreBody");
   const dot = $("coffreDot");
@@ -447,39 +495,116 @@ async function loadCoffre() {
     const d = await r.json();
     if (d.error) throw new Error(d.error);
     dot.classList.remove("off");
+    coffreData = d;
 
-    const fmtNum = (n) => n.toLocaleString("fr-FR");
-    const fmtDate = (iso) => new Date(iso).toLocaleString("fr-FR", {
-      day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit",
-    });
     const depuis = d.depuis ? new Date(d.depuis).toLocaleDateString("fr-FR") : "?";
+    const moves = d.mouvements || [];
 
-    // Bilan par objet, trié du plus gros au plus petit (en valeur absolue).
-    const entries = Object.entries(d.stock || {}).sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-    const stockHtml = entries.length ? entries.map(([item, qty]) => `
-      <div class="stat" style="min-width:150px">
-        <div class="num" style="color:${qty >= 0 ? "var(--gold)" : "#e8555f"}">${qty >= 0 ? "+" : ""}${fmtNum(qty)}</div>
-        <div class="lbl">${escapeHtml(item)}</div>
-      </div>`).join("") : `<div class="empty">Aucun objet détecté.</div>`;
-
-    const movesHtml = (d.mouvements || []).slice(0, 15).map(mv => `
-      <div class="row">
-        <span class="status-dot" style="background:${mv.action === "dépôt" ? "var(--green)" : "#e8555f"}"></span>
-        <span class="name"><b>${escapeHtml(mv.qui)}</b> — ${mv.action} de <b>${fmtNum(mv.qty)}×</b> ${escapeHtml(mv.item)}</span>
-        <span class="pid">${fmtDate(mv.date)}</span>
-      </div>`).join("") || `<div class="empty">Aucun mouvement récent.</div>`;
+    // Bilan par objet : fourni par le Worker (calculé sur tout l'historique).
+    // Fallback : si le Worker n'est pas à jour, on recalcule ici.
+    let bilan = d.bilan;
+    if (!bilan) {
+      bilan = {};
+      for (const mv of moves.slice().reverse()) {
+        const b = (bilan[mv.item] = bilan[mv.item] || { in: 0, out: 0, net: 0, _min: 0 });
+        b[mv.action === "dépôt" ? "in" : "out"] += mv.qty;
+        b.net += mv.action === "dépôt" ? mv.qty : -mv.qty;
+        if (b.net < b._min) b._min = b.net;
+      }
+      for (const b of Object.values(bilan)) { b.estime = -b._min + b.net; }
+    }
+    const items = Object.keys(bilan).sort((a, b) =>
+      (bilan[b].in + bilan[b].out) - (bilan[a].in + bilan[a].out));
+    const rows = items.map(item => {
+      const b = bilan[item];
+      return `<tr>
+        <td>${escapeHtml(item)}</td>
+        <td class="in">+${fmtNum(b.in)}</td>
+        <td class="out">−${fmtNum(b.out)}</td>
+        <td class="net-pos">${fmtNum(b.estime)}</td>
+      </tr>`;
+    }).join("");
 
     body.innerHTML = `
-      <div class="stat-row">${stockHtml}</div>
-      <p style="color:var(--muted); font-size:11.5px; margin:-8px 0 14px;">
-        Bilan calculé depuis le début du journal (${depuis}) : dépôts moins retraits.
-        Un chiffre négatif = plus de sorties que d'entrées enregistrées.
-      </p>
-      <div class="list">${movesHtml}</div>`;
+      <div class="coffre-grid">
+        <div>
+          <h3>Stock du coffre</h3>
+          <table class="tbl">
+            <thead><tr><th>Objet</th><th>Entrées</th><th>Sorties</th><th>En stock</th></tr></thead>
+            <tbody>${rows || `<tr><td colspan="4" class="empty">Aucun objet détecté.</td></tr>`}</tbody>
+          </table>
+          <p class="note">Stock calculé automatiquement depuis le journal (démarré le ${depuis}).
+          C'est une estimation basse : ce qui était déjà dans le coffre avant le ${depuis}
+          et n'a jamais bougé depuis ne peut pas être compté.</p>
+        </div>
+        <div>
+          <h3>Mouvements (${fmtNum(moves.length)})</h3>
+          <div class="filters">
+            <select id="coffreItemSel">
+              <option value="">Tous les objets</option>
+              ${items.map(i => `<option value="${escapeHtml(i)}" ${i === coffreFilterItem ? "selected" : ""}>${escapeHtml(i)}</option>`).join("")}
+            </select>
+            <div class="seg">
+              <button data-act="" class="${coffreFilterAction === "" ? "on" : ""}">Tous</button>
+              <button data-act="dépôt" class="${coffreFilterAction === "dépôt" ? "on" : ""}">Dépôts</button>
+              <button data-act="retrait" class="${coffreFilterAction === "retrait" ? "on" : ""}">Retraits</button>
+            </div>
+          </div>
+          <div class="list" id="coffreMoves" style="max-height: 380px;"></div>
+        </div>
+      </div>`;
+
+    $("coffreItemSel").addEventListener("change", (e) => { coffreFilterItem = e.target.value; renderCoffreMoves(); });
+    for (const btn of body.querySelectorAll(".seg button")) {
+      btn.addEventListener("click", () => {
+        coffreFilterAction = btn.dataset.act;
+        for (const b of body.querySelectorAll(".seg button")) b.classList.toggle("on", b === btn);
+        renderCoffreMoves();
+      });
+    }
+    renderCoffreMoves();
   } catch (e) {
     dot.classList.add("off");
     body.innerHTML = `<div class="error-msg">Impossible de lire le coffre pour le moment.<br>Réessaie avec « Actualiser » dans une minute.</div>`;
   }
+}
+
+function renderCoffreMoves() {
+  const list = $("coffreMoves");
+  if (!list || !coffreData) return;
+  let moves = coffreData.mouvements || [];
+  if (coffreFilterItem) moves = moves.filter(m => m.item === coffreFilterItem);
+  if (coffreFilterAction) moves = moves.filter(m => m.action === coffreFilterAction);
+
+  if (!moves.length) {
+    list.innerHTML = `<div class="empty">Aucun mouvement pour ce filtre.</div>`;
+    return;
+  }
+
+  const fmtTime = (iso) => new Date(iso).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+  const dayLabel = (iso) => {
+    const d = new Date(iso);
+    const today = new Date();
+    const yesterday = new Date(Date.now() - 86400000);
+    if (d.toDateString() === today.toDateString()) return "Aujourd'hui";
+    if (d.toDateString() === yesterday.toDateString()) return "Hier";
+    return d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  };
+
+  let html = "";
+  let lastDay = "";
+  for (const mv of moves.slice(0, 120)) {
+    const day = dayLabel(mv.date);
+    if (day !== lastDay) { html += `<div class="day-sep">${day}</div>`; lastDay = day; }
+    const isIn = mv.action === "dépôt";
+    html += `
+      <div class="row">
+        <span class="status-dot" style="background:${isIn ? "var(--green)" : "#e8555f"}"></span>
+        <span class="name">${escapeHtml(mv.qui)} · <b style="color:${isIn ? "var(--green)" : "#e8555f"}">${isIn ? "+" : "−"}${fmtNum(mv.qty)}</b> ${escapeHtml(mv.item)}</span>
+        <span class="pid">${fmtTime(mv.date)}</span>
+      </div>`;
+  }
+  list.innerHTML = html;
 }
 
 /* ---------- Utilitaires ---------- */
