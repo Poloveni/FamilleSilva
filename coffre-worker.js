@@ -1,5 +1,5 @@
 /**
- * Worker Cloudflare — Coffre de la Famille Silva
+ * Worker Cloudflare — Coffre de la Famille Silva (v2)
  * Lit le salon Discord du coffre (via un bot), calcule le stock,
  * et renvoie le résultat au dashboard.
  *
@@ -17,15 +17,18 @@ export default {
       "Access-Control-Allow-Origin": "*",
       "Content-Type": "application/json; charset=utf-8",
     };
+    const debug = new URL(request.url).searchParams.has("debug");
 
     try {
       // Petit cache : on n'interroge Discord qu'une fois par minute maximum.
       const cache = caches.default;
-      const cacheKey = new Request("https://coffre-silva.cache/v1");
-      const cached = await cache.match(cacheKey);
-      if (cached) {
-        const body = await cached.text();
-        return new Response(body, { headers: cors });
+      const cacheKey = new Request("https://coffre-silva.cache/v2");
+      if (!debug) {
+        const cached = await cache.match(cacheKey);
+        if (cached) {
+          const body = await cached.text();
+          return new Response(body, { headers: cors });
+        }
       }
 
       // Lecture des messages du salon, du plus récent au plus ancien.
@@ -46,26 +49,42 @@ export default {
         before = batch[batch.length - 1].id;
       }
 
+      // Mode debug : renvoie 2 messages bruts pour inspection.
+      if (debug) {
+        return new Response(JSON.stringify({ exemple: all.slice(0, 2) }, null, 2), { headers: cors });
+      }
+
       // Analyse : "Javier Silva a déposé 74x Pochon De Mexicana"
+      const RE = /(.+?)\s+a\s+(d[ée]pos[ée]?|retir[ée]?)\s+(\d+)\s*x?\s+(.+)/i;
       const moves = [];
       for (const m of all) {
+        // On rassemble tous les endroits où le texte peut se cacher.
         const texts = [];
         if (m.content) texts.push(m.content);
         for (const e of m.embeds || []) {
-          if (e.title) texts.push(e.title);
           if (e.description) texts.push(e.description);
-          for (const f of e.fields || []) texts.push((f.name || "") + " " + (f.value || ""));
+          for (const f of e.fields || []) {
+            texts.push((f.name || "") + " " + (f.value || ""));
+            texts.push(f.value || "");
+          }
+          if (e.title) texts.push(e.title);
+          if (e.author && e.author.name) texts.push(e.author.name);
+          if (e.footer && e.footer.text) texts.push(e.footer.text);
         }
-        const joined = texts.join(" ").replace(/\*/g, "").replace(/\s+/g, " ").trim();
-        const match = joined.match(/(.+?)\s+a\s+(d[ée]pos[ée]|retir[ée])\s+(\d+)\s*x\s+(.+)/i);
-        if (match) {
-          moves.push({
-            qui: match[1].trim(),
-            action: /d[ée]pos/i.test(match[2]) ? "dépôt" : "retrait",
-            qty: parseInt(match[3], 10),
-            item: match[4].trim(),
-            date: m.timestamp,
-          });
+        // On teste chaque fragment séparément : le premier qui matche gagne.
+        for (const t of texts) {
+          const clean = String(t).replace(/[*_`~]/g, "").replace(/\s+/g, " ").trim();
+          const match = clean.match(RE);
+          if (match) {
+            moves.push({
+              qui: match[1].trim(),
+              action: /d[ée]pos/i.test(match[2]) ? "dépôt" : "retrait",
+              qty: parseInt(match[3], 10),
+              item: match[4].trim(),
+              date: m.timestamp,
+            });
+            break;
+          }
         }
       }
 
